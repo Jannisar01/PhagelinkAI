@@ -1,32 +1,24 @@
-export type LocalPhageRecord = {
-  id: string;
-  name: string;
-  host_species: string | null;
-  lifecycle: "lytic" | "temperate" | null;
-  source_url: string;
-  taxonomy: string | null;
-  completeness: string | null;
-  length_kb: number | null;
-  gc_content: number | null;
-  cluster: string | null;
-  subcluster: string | null;
-};
+import type { PhageCandidate, PhageProvider } from "./PhageProvider";
 
-async function fetchJson(path: string): Promise<LocalPhageRecord[]> {
-  const response = await fetch(path);
-  if (!response.ok) {
-    throw new Error(`${response.status}: ${path}`);
-  }
-  return response.json();
-}
+export class LocalJsonProvider implements PhageProvider {
+  async getCandidates(hostSpecies: string): Promise<PhageCandidate[]> {
+    const response = await fetch("/data/phages.sample.json", {
+      cache: "no-store",
+    });
 
-export async function loadLocalPhages(): Promise<LocalPhageRecord[]> {
-  try {
-    return await fetchJson('/data/phagescope.json');
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith('404:')) {
-      return fetchJson('/data/phages.sample.json');
+    if (!response.ok) {
+      throw new Error("Failed to load local phage dataset.");
     }
-    throw error;
+
+    const records = (await response.json()) as PhageCandidate[];
+    const normalized = hostSpecies.trim().toLowerCase();
+
+    if (!normalized) {
+      return records;
+    }
+
+    return records.filter((record) =>
+      record.host_species.toLowerCase().includes(normalized),
+    );
   }
 }
