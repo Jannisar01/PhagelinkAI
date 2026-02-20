@@ -1,0 +1,16 @@
+{
+  "name": "phageai-match-monorepo",
+  "private": true,
+  "workspaces": [
+    "apps/web"
+  ],
+  "scripts": {
+    "dev:web": "npm --workspace apps/web run dev",
+    "dev:api": "PYTHONPATH=packages/core/src uvicorn main:app --app-dir apps/api --reload --port 8000",
+    "dev": "concurrently \"npm run dev:api\" \"npm run dev:web\"",
+    "lint:web": "npm --workspace apps/web run lint"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  }
+}
