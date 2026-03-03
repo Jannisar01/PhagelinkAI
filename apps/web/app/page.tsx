@@ -24,6 +24,16 @@ type RankedPhage = Candidate & {
   };
 };
 
+type PdfExportPayloadItem = {
+  id: string;
+  name: string;
+  host_species: string;
+  lifecycle?: string | null;
+  source_url?: string | null;
+  score: number;
+  reasons_json: RankedPhage["reasons_json"];
+};
+
 export default function HomePage() {
   const [hostSpecies, setHostSpecies] = useState("Escherichia coli");
   const [results, setResults] = useState<RankedPhage[]>([]);
@@ -87,13 +97,13 @@ export default function HomePage() {
     setPage(1);
   }, [hostSpecies, lyticOnly, minScore, topN, results]);
 
-  const downloadCsv = () => {
+  const buildCsvLines = (data: RankedPhage[]) => {
     const escapeCell = (value: string) => {
       const escaped = value.replaceAll('"', '""');
       return `"${escaped}"`;
     };
 
-    const lines = [
+    return [
       [
         "id",
         "name",
@@ -104,7 +114,7 @@ export default function HomePage() {
         "negatives",
         "source_url"
       ].join(","),
-      ...paginatedResults.map((item) =>
+      ...data.map((item) =>
         [
           escapeCell(item.id),
           escapeCell(item.name),
@@ -117,6 +127,10 @@ export default function HomePage() {
         ].join(",")
       )
     ];
+  };
+
+  const downloadCsv = () => {
+    const lines = buildCsvLines(paginatedResults);
 
     const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -124,6 +138,63 @@ export default function HomePage() {
     const normalizedHost = hostSpecies.trim().replaceAll(/\s+/g, "_") || "unknown_host";
     anchor.href = url;
     anchor.download = `phageai_ranked_${normalizedHost}_page${currentPage}.csv`;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadAllFilteredCsv = () => {
+    const lines = buildCsvLines(filteredResults);
+
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    const normalizedHost = hostSpecies.trim().replaceAll(/\s+/g, "_") || "unknown_host";
+    anchor.href = url;
+    anchor.download = `phageai_ranked_${normalizedHost}_ALL.csv`;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadAllFilteredPdf = async () => {
+    const normalizedHost = hostSpecies.trim().replaceAll(/\s+/g, "_") || "unknown_host";
+    const payload = {
+      host_species: hostSpecies,
+      filters: {
+        lyticOnly,
+        minScore
+      },
+      results: filteredResults.map<PdfExportPayloadItem>((item) => ({
+        id: item.id,
+        name: item.name,
+        host_species: item.host_species,
+        lifecycle: item.lifecycle,
+        source_url: item.source_url,
+        score: item.score,
+        reasons_json: item.reasons_json
+      }))
+    };
+
+    const response = await fetch(`${apiBaseUrl}/export/pdf`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      throw new Error("Failed to export PDF report");
+    }
+
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `phageai_ranked_${normalizedHost}_ALL.pdf`;
     document.body.append(anchor);
     anchor.click();
     anchor.remove();
@@ -199,13 +270,21 @@ export default function HomePage() {
           </select>
         </div>
 
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm text-slate-600">
             Showing {paginatedResults.length} of {filteredResults.length} filtered results.
           </p>
-          <Button onClick={downloadCsv} disabled={paginatedResults.length === 0}>
-            Download CSV
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={downloadCsv} disabled={paginatedResults.length === 0}>
+              Download CSV
+            </Button>
+            <Button onClick={downloadAllFilteredCsv} disabled={filteredResults.length === 0}>
+              Download CSV (All filtered)
+            </Button>
+            <Button onClick={downloadAllFilteredPdf} disabled={filteredResults.length === 0}>
+              Download PDF (All filtered)
+            </Button>
+          </div>
         </div>
       </Card>
 
