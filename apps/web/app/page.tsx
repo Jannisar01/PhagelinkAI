@@ -1,14 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import {
-  getAnnotatedProteinSignals,
-  type PhageProteinSignals
-} from "@/lib/data/annotatedProteins";
 import { getProvider } from "@/lib/providers";
 
 type Candidate = {
@@ -29,12 +25,12 @@ type RankedPhage = Candidate & {
 };
 
 type ProteinFeatureSummary = {
-  proteins?: string | number | null;
-  acr?: string | number | null;
-  amr?: string | number | null;
-  vir?: string | number | null;
-  tm?: string | number | null;
-  int?: string | number | null;
+  total_proteins?: string | number | null;
+  anti_crispr_hits?: string | number | null;
+  amr_hits?: string | number | null;
+  virulence_hits?: string | number | null;
+  transmembrane_hits?: string | number | null;
+  integrase_hits?: string | number | null;
 };
 
 type PdfExportPayloadItem = {
@@ -55,12 +51,13 @@ export default function HomePage() {
   const [lyticOnly, setLyticOnly] = useState(false);
   const [minScore, setMinScore] = useState(0);
   const [page, setPage] = useState(1);
-  const [proteinSignalsByPhage, setProteinSignalsByPhage] = useState<Record<
-    string,
-    PhageProteinSignals
-  > | null>(null);
-  const [proteinSignalsRequested, setProteinSignalsRequested] = useState(false);
-  const [proteinSignalsAvailable, setProteinSignalsAvailable] = useState(false);
+  const [proteinFeaturesById, setProteinFeaturesById] = useState<
+    Record<string, ProteinFeatureSummary>
+  >({});
+  const [hasProteinFeatures, setHasProteinFeatures] = useState(false);
+  const [proteinFeaturesRequested, setProteinFeaturesRequested] =
+    useState(false);
+  const proteinFeaturesLoadedRef = useRef(false);
 
   const apiBaseUrl = useMemo(
     () => process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000",
@@ -91,15 +88,88 @@ export default function HomePage() {
       const data = (await response.json()) as RankedPhage[];
       setResults(data);
 
-      if (!proteinSignalsRequested) {
-        setProteinSignalsRequested(true);
+      if (!proteinFeaturesLoadedRef.current && !proteinFeaturesRequested) {
+        proteinFeaturesLoadedRef.current = true;
+        setProteinFeaturesRequested(true);
 
         try {
-          const signals = await getAnnotatedProteinSignals();
-          setProteinSignalsByPhage(signals);
-          setProteinSignalsAvailable(true);
+          const featuresResponse = await fetch(
+            "/data/refseq_protein_features.json",
+            {
+              cache: "no-store"
+            }
+          );
+
+          if (!featuresResponse.ok) {
+            setHasProteinFeatures(false);
+            return;
+          }
+
+          const payload = (await featuresResponse.json()) as unknown;
+          const nextMap: Record<string, ProteinFeatureSummary> = {};
+
+          const normalizeFeatureValue = (
+            value: unknown
+          ): string | number | null => {
+            if (value === null || value === undefined) {
+              return null;
+            }
+
+            if (typeof value === "number") {
+              return value;
+            }
+
+            if (typeof value === "string") {
+              const trimmed = value.trim();
+              return trimmed.length > 0 ? trimmed : null;
+            }
+
+            return null;
+          };
+
+          const normalizeFeatureRecord = (
+            raw: Record<string, unknown>
+          ): ProteinFeatureSummary => ({
+            total_proteins: normalizeFeatureValue(raw.total_proteins),
+            anti_crispr_hits: normalizeFeatureValue(raw.anti_crispr_hits),
+            amr_hits: normalizeFeatureValue(raw.amr_hits),
+            virulence_hits: normalizeFeatureValue(raw.virulence_hits),
+            transmembrane_hits: normalizeFeatureValue(raw.transmembrane_hits),
+            integrase_hits: normalizeFeatureValue(raw.integrase_hits)
+          });
+
+          if (Array.isArray(payload)) {
+            for (const row of payload) {
+              if (!row || typeof row !== "object") {
+                continue;
+              }
+
+              const record = row as Record<string, unknown>;
+              const idValue = record.Phage_ID ?? record.id;
+              const id = typeof idValue === "string" ? idValue.trim() : "";
+              if (!id) {
+                continue;
+              }
+
+              nextMap[id] = normalizeFeatureRecord(record);
+            }
+          } else if (payload && typeof payload === "object") {
+            for (const [id, row] of Object.entries(
+              payload as Record<string, unknown>
+            )) {
+              if (!row || typeof row !== "object") {
+                continue;
+              }
+
+              nextMap[id] = normalizeFeatureRecord(row as Record<string, unknown>);
+            }
+          }
+
+          setProteinFeaturesById(nextMap);
+          setHasProteinFeatures(true);
         } catch {
-          // Optional TSV may be missing; keep UI unchanged.
+          setProteinFeaturesById({});
+          setHasProteinFeatures(false);
         }
       }
     } finally {
@@ -130,98 +200,6 @@ export default function HomePage() {
   useEffect(() => {
     setPage(1);
   }, [hostSpecies, lyticOnly, minScore, topN, results]);
-
-  useEffect(() => {
-    let isCancelled = false;
-
-    const normalizeFeatureValue = (value: unknown): string | number | null => {
-      if (value === null || value === undefined) {
-        return null;
-      }
-
-      if (typeof value === "number") {
-        return value;
-      }
-
-      if (typeof value === "string") {
-        const trimmed = value.trim();
-        return trimmed.length > 0 ? trimmed : null;
-      }
-
-      return null;
-    };
-
-    const normalizeFeatureRecord = (raw: Record<string, unknown>): ProteinFeatureSummary => {
-      const proteins = normalizeFeatureValue(raw.proteins);
-      const acr = normalizeFeatureValue(raw.acr);
-      const amr = normalizeFeatureValue(raw.amr);
-      const vir = normalizeFeatureValue(raw.vir);
-      const tm = normalizeFeatureValue(raw.tm);
-      const int = normalizeFeatureValue(raw.int);
-
-      return {
-        proteins,
-        acr,
-        amr,
-        vir,
-        tm,
-        int
-      };
-    };
-
-    const loadProteinFeatures = async () => {
-      try {
-        const response = await fetch("/data/refseq_protein_features.json", {
-          cache: "no-store"
-        });
-
-        if (!response.ok) {
-          return;
-        }
-
-        const payload = (await response.json()) as unknown;
-        const nextMap: Record<string, ProteinFeatureSummary> = {};
-
-        if (Array.isArray(payload)) {
-          for (const row of payload) {
-            if (!row || typeof row !== "object") {
-              continue;
-            }
-
-            const record = row as Record<string, unknown>;
-            const id = typeof record.id === "string" ? record.id.trim() : "";
-            if (!id) {
-              continue;
-            }
-
-            nextMap[id] = normalizeFeatureRecord(record);
-          }
-        } else if (payload && typeof payload === "object") {
-          for (const [id, row] of Object.entries(payload as Record<string, unknown>)) {
-            if (!row || typeof row !== "object") {
-              continue;
-            }
-
-            nextMap[id] = normalizeFeatureRecord(row as Record<string, unknown>);
-          }
-        }
-
-        if (!isCancelled) {
-          setProteinFeaturesById(nextMap);
-        }
-      } catch {
-        if (!isCancelled) {
-          setProteinFeaturesById({});
-        }
-      }
-    };
-
-    void loadProteinFeatures();
-
-    return () => {
-      isCancelled = true;
-    };
-  }, []);
 
   const buildCsvLines = (data: RankedPhage[]) => {
     const escapeCell = (value: string) => {
@@ -334,15 +312,6 @@ export default function HomePage() {
     URL.revokeObjectURL(url);
   };
 
-  const emptyProteinSignals: PhageProteinSignals = {
-    total_proteins: 0,
-    anti_crispr_hits: 0,
-    amr_hits: 0,
-    virulence_hits: 0,
-    transmembrane_hits: 0,
-    integrase_hits: 0
-  };
-
   return (
     <main className="mx-auto max-w-4xl space-y-6 p-6">
       <h1 className="text-2xl font-bold">PhageAI Match MVP</h1>
@@ -444,8 +413,7 @@ export default function HomePage() {
 
       <section className="grid gap-4">
         {paginatedResults.map((item) => {
-          const proteinSignals =
-            proteinSignalsByPhage?.[item.id] ?? emptyProteinSignals;
+          const proteinFeatures = proteinFeaturesById[item.id];
 
           return (
             <Card className="space-y-2 p-4" key={item.id}>
@@ -458,14 +426,14 @@ export default function HomePage() {
               <p className="text-sm text-slate-700">
                 Host: {item.host_species}
               </p>
-              {proteinSignalsAvailable ? (
+              {hasProteinFeatures && proteinFeatures ? (
                 <p className="text-xs text-slate-600">
-                  Proteins: {proteinSignals.total_proteins} | Acr:{" "}
-                  {proteinSignals.anti_crispr_hits} | AMR:{" "}
-                  {proteinSignals.amr_hits} | Vir:{" "}
-                  {proteinSignals.virulence_hits} | TM:{" "}
-                  {proteinSignals.transmembrane_hits} | Int:{" "}
-                  {proteinSignals.integrase_hits}
+                  Proteins: {proteinFeatures.total_proteins ?? 0} | Acr:{" "}
+                  {proteinFeatures.anti_crispr_hits ?? 0} | AMR:{" "}
+                  {proteinFeatures.amr_hits ?? 0} | Vir:{" "}
+                  {proteinFeatures.virulence_hits ?? 0} | TM:{" "}
+                  {proteinFeatures.transmembrane_hits ?? 0} | Int:{" "}
+                  {proteinFeatures.integrase_hits ?? 0}
                 </p>
               ) : null}
               <p className="text-sm text-slate-700">
