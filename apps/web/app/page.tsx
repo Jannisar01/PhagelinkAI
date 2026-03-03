@@ -5,6 +5,10 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import {
+  getAnnotatedProteinSignals,
+  type PhageProteinSignals
+} from "@/lib/data/annotatedProteins";
 import { getProvider } from "@/lib/providers";
 
 type Candidate = {
@@ -42,6 +46,12 @@ export default function HomePage() {
   const [lyticOnly, setLyticOnly] = useState(false);
   const [minScore, setMinScore] = useState(0);
   const [page, setPage] = useState(1);
+  const [proteinSignalsByPhage, setProteinSignalsByPhage] = useState<Record<
+    string,
+    PhageProteinSignals
+  > | null>(null);
+  const [proteinSignalsRequested, setProteinSignalsRequested] = useState(false);
+  const [proteinSignalsAvailable, setProteinSignalsAvailable] = useState(false);
 
   const apiBaseUrl = useMemo(
     () => process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000",
@@ -71,6 +81,18 @@ export default function HomePage() {
 
       const data = (await response.json()) as RankedPhage[];
       setResults(data);
+
+      if (!proteinSignalsRequested) {
+        setProteinSignalsRequested(true);
+
+        try {
+          const signals = await getAnnotatedProteinSignals();
+          setProteinSignalsByPhage(signals);
+          setProteinSignalsAvailable(true);
+        } catch {
+          // Optional TSV may be missing; keep UI unchanged.
+        }
+      }
     } finally {
       setLoading(false);
     }
@@ -91,7 +113,10 @@ export default function HomePage() {
   const totalPages = Math.max(1, Math.ceil(filteredResults.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const startIndex = (currentPage - 1) * pageSize;
-  const paginatedResults = filteredResults.slice(startIndex, startIndex + pageSize);
+  const paginatedResults = filteredResults.slice(
+    startIndex,
+    startIndex + pageSize
+  );
 
   useEffect(() => {
     setPage(1);
@@ -132,10 +157,13 @@ export default function HomePage() {
   const downloadCsv = () => {
     const lines = buildCsvLines(paginatedResults);
 
-    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const blob = new Blob([lines.join("\n")], {
+      type: "text/csv;charset=utf-8;"
+    });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
-    const normalizedHost = hostSpecies.trim().replaceAll(/\s+/g, "_") || "unknown_host";
+    const normalizedHost =
+      hostSpecies.trim().replaceAll(/\s+/g, "_") || "unknown_host";
     anchor.href = url;
     anchor.download = `phageai_ranked_${normalizedHost}_page${currentPage}.csv`;
     document.body.append(anchor);
@@ -147,10 +175,13 @@ export default function HomePage() {
   const downloadAllFilteredCsv = () => {
     const lines = buildCsvLines(filteredResults);
 
-    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const blob = new Blob([lines.join("\n")], {
+      type: "text/csv;charset=utf-8;"
+    });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
-    const normalizedHost = hostSpecies.trim().replaceAll(/\s+/g, "_") || "unknown_host";
+    const normalizedHost =
+      hostSpecies.trim().replaceAll(/\s+/g, "_") || "unknown_host";
     anchor.href = url;
     anchor.download = `phageai_ranked_${normalizedHost}_ALL.csv`;
     document.body.append(anchor);
@@ -160,7 +191,8 @@ export default function HomePage() {
   };
 
   const downloadAllFilteredPdf = async () => {
-    const normalizedHost = hostSpecies.trim().replaceAll(/\s+/g, "_") || "unknown_host";
+    const normalizedHost =
+      hostSpecies.trim().replaceAll(/\s+/g, "_") || "unknown_host";
     const payload = {
       host_species: hostSpecies,
       filters: {
@@ -199,6 +231,15 @@ export default function HomePage() {
     anchor.click();
     anchor.remove();
     URL.revokeObjectURL(url);
+  };
+
+  const emptyProteinSignals: PhageProteinSignals = {
+    total_proteins: 0,
+    anti_crispr_hits: 0,
+    amr_hits: 0,
+    virulence_hits: 0,
+    transmembrane_hits: 0,
+    integrase_hits: 0
   };
 
   return (
@@ -240,7 +281,9 @@ export default function HomePage() {
               </option>
             ))}
           </select>
-          <p className="text-xs text-slate-500">Page size uses the Top N value.</p>
+          <p className="text-xs text-slate-500">
+            Page size uses the Top N value.
+          </p>
         </div>
 
         <div className="grid gap-3 md:grid-cols-3">
@@ -272,16 +315,26 @@ export default function HomePage() {
 
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm text-slate-600">
-            Showing {paginatedResults.length} of {filteredResults.length} filtered results.
+            Showing {paginatedResults.length} of {filteredResults.length}{" "}
+            filtered results.
           </p>
           <div className="flex flex-wrap gap-2">
-            <Button onClick={downloadCsv} disabled={paginatedResults.length === 0}>
+            <Button
+              onClick={downloadCsv}
+              disabled={paginatedResults.length === 0}
+            >
               Download CSV
             </Button>
-            <Button onClick={downloadAllFilteredCsv} disabled={filteredResults.length === 0}>
+            <Button
+              onClick={downloadAllFilteredCsv}
+              disabled={filteredResults.length === 0}
+            >
               Download CSV (All filtered)
             </Button>
-            <Button onClick={downloadAllFilteredPdf} disabled={filteredResults.length === 0}>
+            <Button
+              onClick={downloadAllFilteredPdf}
+              disabled={filteredResults.length === 0}
+            >
               Download PDF (All filtered)
             </Button>
           </div>
@@ -289,34 +342,54 @@ export default function HomePage() {
       </Card>
 
       <section className="grid gap-4">
-        {paginatedResults.map((item) => (
-          <Card className="space-y-2 p-4" key={item.id}>
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">{item.name}</h2>
-              <span className="rounded bg-slate-100 px-2 py-1 text-sm font-medium">
-                {item.score}
-              </span>
-            </div>
-            <p className="text-sm text-slate-700">Host: {item.host_species}</p>
-            <p className="text-sm text-slate-700">
-              Matched factors:{" "}
-              {item.reasons_json.positives.join("; ") || "None"}
-            </p>
-            {item.source_url ? (
-              <a
-                className="text-sm text-blue-600 underline"
-                href={item.source_url}
-                target="_blank"
-              >
-                Access record
-              </a>
-            ) : null}
-          </Card>
-        ))}
+        {paginatedResults.map((item) => {
+          const proteinSignals =
+            proteinSignalsByPhage?.[item.id] ?? emptyProteinSignals;
+
+          return (
+            <Card className="space-y-2 p-4" key={item.id}>
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-semibold">{item.name}</h2>
+                <span className="rounded bg-slate-100 px-2 py-1 text-sm font-medium">
+                  {item.score}
+                </span>
+              </div>
+              <p className="text-sm text-slate-700">
+                Host: {item.host_species}
+              </p>
+              {proteinSignalsAvailable ? (
+                <p className="text-xs text-slate-600">
+                  Proteins: {proteinSignals.total_proteins} | Acr:{" "}
+                  {proteinSignals.anti_crispr_hits} | AMR:{" "}
+                  {proteinSignals.amr_hits} | Vir:{" "}
+                  {proteinSignals.virulence_hits} | TM:{" "}
+                  {proteinSignals.transmembrane_hits} | Int:{" "}
+                  {proteinSignals.integrase_hits}
+                </p>
+              ) : null}
+              <p className="text-sm text-slate-700">
+                Matched factors:{" "}
+                {item.reasons_json.positives.join("; ") || "None"}
+              </p>
+              {item.source_url ? (
+                <a
+                  className="text-sm text-blue-600 underline"
+                  href={item.source_url}
+                  target="_blank"
+                >
+                  Access record
+                </a>
+              ) : null}
+            </Card>
+          );
+        })}
       </section>
 
       <div className="flex items-center justify-between">
-        <Button onClick={() => setPage((prev) => Math.max(1, prev - 1))} disabled={currentPage <= 1}>
+        <Button
+          onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+          disabled={currentPage <= 1}
+        >
           Prev
         </Button>
         <p className="text-sm text-slate-600">
