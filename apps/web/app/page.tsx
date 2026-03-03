@@ -24,6 +24,15 @@ type RankedPhage = Candidate & {
   };
 };
 
+type ProteinFeatureSummary = {
+  proteins?: string | number | null;
+  acr?: string | number | null;
+  amr?: string | number | null;
+  vir?: string | number | null;
+  tm?: string | number | null;
+  int?: string | number | null;
+};
+
 type PdfExportPayloadItem = {
   id: string;
   name: string;
@@ -42,6 +51,7 @@ export default function HomePage() {
   const [lyticOnly, setLyticOnly] = useState(false);
   const [minScore, setMinScore] = useState(0);
   const [page, setPage] = useState(1);
+  const [proteinFeaturesById, setProteinFeaturesById] = useState<Record<string, ProteinFeatureSummary>>({});
 
   const apiBaseUrl = useMemo(
     () => process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000",
@@ -96,6 +106,98 @@ export default function HomePage() {
   useEffect(() => {
     setPage(1);
   }, [hostSpecies, lyticOnly, minScore, topN, results]);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const normalizeFeatureValue = (value: unknown): string | number | null => {
+      if (value === null || value === undefined) {
+        return null;
+      }
+
+      if (typeof value === "number") {
+        return value;
+      }
+
+      if (typeof value === "string") {
+        const trimmed = value.trim();
+        return trimmed.length > 0 ? trimmed : null;
+      }
+
+      return null;
+    };
+
+    const normalizeFeatureRecord = (raw: Record<string, unknown>): ProteinFeatureSummary => {
+      const proteins = normalizeFeatureValue(raw.proteins);
+      const acr = normalizeFeatureValue(raw.acr);
+      const amr = normalizeFeatureValue(raw.amr);
+      const vir = normalizeFeatureValue(raw.vir);
+      const tm = normalizeFeatureValue(raw.tm);
+      const int = normalizeFeatureValue(raw.int);
+
+      return {
+        proteins,
+        acr,
+        amr,
+        vir,
+        tm,
+        int
+      };
+    };
+
+    const loadProteinFeatures = async () => {
+      try {
+        const response = await fetch("/data/refseq_protein_features.json", {
+          cache: "no-store"
+        });
+
+        if (!response.ok) {
+          return;
+        }
+
+        const payload = (await response.json()) as unknown;
+        const nextMap: Record<string, ProteinFeatureSummary> = {};
+
+        if (Array.isArray(payload)) {
+          for (const row of payload) {
+            if (!row || typeof row !== "object") {
+              continue;
+            }
+
+            const record = row as Record<string, unknown>;
+            const id = typeof record.id === "string" ? record.id.trim() : "";
+            if (!id) {
+              continue;
+            }
+
+            nextMap[id] = normalizeFeatureRecord(record);
+          }
+        } else if (payload && typeof payload === "object") {
+          for (const [id, row] of Object.entries(payload as Record<string, unknown>)) {
+            if (!row || typeof row !== "object") {
+              continue;
+            }
+
+            nextMap[id] = normalizeFeatureRecord(row as Record<string, unknown>);
+          }
+        }
+
+        if (!isCancelled) {
+          setProteinFeaturesById(nextMap);
+        }
+      } catch {
+        if (!isCancelled) {
+          setProteinFeaturesById({});
+        }
+      }
+    };
+
+    void loadProteinFeatures();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
 
   const buildCsvLines = (data: RankedPhage[]) => {
     const escapeCell = (value: string) => {
@@ -302,6 +404,31 @@ export default function HomePage() {
               Matched factors:{" "}
               {item.reasons_json.positives.join("; ") || "None"}
             </p>
+            {(() => {
+              const featureSummary = proteinFeaturesById[item.id];
+              if (!featureSummary) {
+                return null;
+              }
+
+              const rows: Array<{ label: string; value: string | number | null | undefined }> = [
+                { label: "Proteins", value: featureSummary.proteins },
+                { label: "Acr", value: featureSummary.acr },
+                { label: "AMR", value: featureSummary.amr },
+                { label: "Vir", value: featureSummary.vir },
+                { label: "TM", value: featureSummary.tm },
+                { label: "Int", value: featureSummary.int }
+              ].filter(({ value }) => value !== null && value !== undefined && value !== "");
+
+              if (rows.length === 0) {
+                return null;
+              }
+
+              return (
+                <p className="text-sm text-slate-700">
+                  {rows.map(({ label, value }) => `${label}: ${value}`).join(" • ")}
+                </p>
+              );
+            })()}
             {item.source_url ? (
               <a
                 className="text-sm text-blue-600 underline"
